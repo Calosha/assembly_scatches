@@ -3,9 +3,12 @@
 ## Counter
 Test program to count from 0 to 255 and display the result on the screen.
 
-## LCD_Display
+## LCD_control
 Assembly for 1602A LCD power up and show some letters (code works without RAM)
 
+## Display_driver
+Driver to initialize the 1602A LCD with proper timing and subroutines
+(needs RAM and stack init for JSR, RTS, PHA, PHL insrunctions)
 
 ## Compilation
 ```
@@ -16,4 +19,4 @@ or
 ```
 make
 ```
-in the appropriate folder
+in the appropriate folder.
