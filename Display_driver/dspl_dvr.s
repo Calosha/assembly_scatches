@@ -1,98 +1,53 @@
 .setcpu "65816"
+;===============================================
+; Zero Page Usage Map
+;===============================================
+string_ptr   = $00    ; String pointer (2 bytes: $00-$01)
+; $02-$FF available for future use
+
+;===============================================
+; RAM Variables uninitialized
+;===============================================
+.segment "BSS"
+
+lcd_char_count: .res 1    ; Position counter for 16x2 LCD (0-31)
+
+
+.segment "RODATA"
+    email_string:
+        .byte "Zaychick sladkiy marmeladniy!",0
+
 .segment "CODE"
 
     ; stack init
-    LDX #$FF
-    TXS    
+    LDX #$FF 
+    TXS ; 65816 reserves page1 for stack so txs will get $01FF that reflects in black space for stack in memory map
 
     ; display init
     JSR lcd_init
 
-    LDA #$61 ; a
-    JSR show_char
+    ; Show email address
+    LDA #< email_string ; load low byte into A
+    LDX #> email_string ; load high byte into X
 
-    LDA #$6C ; l  
-    JSR show_char
 
-    LDA #$65 ; e
-    JSR show_char
+    JSR show_string
 
-    LDA #$78 ; x
-    JSR show_char
-
-    LDA #$65 ; e
-    JSR show_char
-
-    LDA #$79 ; y
-    JSR show_char
-
-    LDA #$2E ; dot
-    JSR show_char
-
-    LDA #$63 ; c
-    JSR show_char
-
-    LDA #$68 ; h
-    JSR show_char
-
-    LDA #$65 ; e
-    JSR show_char
-
-    LDA #$72 ; r
-    JSR show_char
-
-    LDA #$6E ; n
-    JSR show_char
-
-    LDA #$79 ; y
-    JSR show_char
-
-    LDA #$75 ; u
-    JSR show_char
-
-    LDA #$6B ; k
-    JSR show_char
     
-    LDA #$40 ; @
-    JSR show_char
-
-    LDA #$67 ; g
-    JSR show_char
-
-    LDA #$2A ; m
-    JSR show_char
-
-    LDA #$61 ; a
-    JSR show_char
-
-    LDA #$69 ; i
-    JSR show_char
-
-    LDA #$6C ; l  
-    JSR show_char
-
-    LDA #$2E ; dot
-    JSR show_char
-
-    LDA #$63 ; c
-    JSR show_char
-
-    LDA #$6F ; o
-    JSR show_char
-
-    LDA #$2A ; m
-    JSR show_char
-
     JMP forever ; Go to forever loop
 
 forever:
     NOP
     JMP forever
 
-; Functions:
+;===============================================
+; Functions
+;===============================================
 
 ; Delay with minimum one loop of 1542 cycles ~830us * value of LDA set before execution
 delay:
+    PHY ; Save Y to avoid conflicts
+    PHX ; Save X to avoid conflicts
     TAX ; transfer A --> X
 outer_loop:
     LDY #$FF ; Init Y index
@@ -101,6 +56,8 @@ inner_loop:
     BNE inner_loop ; if Z flag is 0 branch to inner_delay else continue (Z flag is 1 when previous operation is 0)
     DEX ; x--
     BNE outer_loop ; if Z flag is 0 branch to outer_delay else continue
+    PLY ; restore Y
+    PLX ; restore X
     RTS ; return
 
 ; Show single character
@@ -109,8 +66,54 @@ show_char:
     LDA #$01 ; 842us
     JSR delay ; Wait before write
     PLA ; restore character (pull accumulator from stack)
-    STA $6001 ; Write the character
+    STA $6001 ; Put character on data bus (no E pulse yet)
+    STA $6003 ; Pulse E to latch character data (RS=1)(E=1)
+    STA $6001 ; Clear E=0 to complete pulse (RS=1)(E=0)
+    LDA #$01 ; 842us
+    JSR delay ; Wait after write LCD needs some time to finish writing
+    
+    ; change line if there are alredy 16 chars shown on LCD
+    INC lcd_char_count ; Character is written account for it
+    LDA lcd_char_count
+    AND #$0F ; mod 16
+    BEQ lcd_move_to_line_2
+
     RTS ; Return to caller
+
+; Send command to LCD
+send_command:
+    STA $6000 ; Put command on bus (no E pulse yet)
+    STA $6002 ; Pulse E to latch a command (RS=0)(E=1)
+    NOP ; 2x0.54 microsecond delay jic
+    STA $6000 ; Clear E=0 to complete pulse (RS=0, E=0)
+    LDA #$01 ; 1542 cycles for inner loop (~842us delay) req 100us (moved the most common delay here)
+    JSR delay
+    RTS
+    
+
+; Show string
+show_string:
+    STA string_ptr
+    STX string_ptr+1
+    LDY #0 ; start at the first character
+loop:
+    LDA (string_ptr), Y
+    BEQ done
+    
+    JSR show_char         ; Show actual character
+    
+    INY
+    JMP loop
+done:
+    ; Now show the Y index as a number
+    TYA           ; Transfer Y to A
+    JSR write_to_led ; Display the index
+    RTS
+
+; Show binary digit on 373 latch with led
+write_to_led:
+    STA $9000 ; Write accumulator to LED 373
+    RTS
 
 ; Initialize display
 lcd_init:
@@ -119,65 +122,50 @@ lcd_init:
 
     ; First sequence 
     LDA #$30
-    STA $6000
-    NOP ; 2x0.54 microsecond delay jic
+    JSR send_command
 
     LDA #$05 ; this is 5 times loop of 255 2 (255*6)+2 +8(outerloop overhead) = 1542 cycles for inner loop (~6.2ms delay) req 4.2ms
     JSR delay
 
     ; Second sequence 
     LDA #$30
-    STA $6000
-    NOP
+    JSR send_command
 
     LDA #$01 ; 1542 cycles for inner loop (~842us delay) req 100us
     JSR delay
     
     ; Third sequence
     LDA #$30
-    STA $6000
-    NOP
+    JSR send_command
 
-    LDA #$01 ; 1542 cycles for inner loop (~842us delay) req 37us for function set
-    JSR delay
-
-    ; what is 38? function set 2 line 5x8 dots
+    ; what is 38? function set 2 line 5x8 dots and 8bit mode
     LDA #$38
-    STA $6000
-    NOP
+    JSR send_command
     
-    LDA #$01 ; 1542 cycles for inner loop (~842us delay) req 37us for display off
-    JSR delay
 
     ; Display off
     LDA #$08
-    STA $6000
-    NOP
-
-    LDA #$01 ; 1542 cycles for inner loop (~842us delay) req 37 us after Display off command
-    JSR delay
+    JSR send_command
 
     ; Display clear
     LDA #$01
-    STA $6000
-    NOP
+    JSR send_command
 
     LDA #$05 ; 1542 cycles for inner loop (~2.5ms delay) req 1.52
     JSR delay
     
     ; Entry mode set (I/D=1: Cursor moves right (increment))
     LDA #$06 
-    STA $6000
-    NOP
-    
-    LDA #$01 ; 1542 cycles for inner loop (~842us delay) req 37us for Display ON/OFF Control
-    JSR delay
+    JSR send_command
 
     LDA #$0C ;  Display ON/OFF Control:Display ON /Cursor OFF/ Blink OFF
-    STA $6000
-    NOP
-  
-    LDA #$01 ; 1542 cycles for inner loop (~842us delay) req 37us between letters ( move to show letter function)
-    JSR delay
+    JSR send_command
+    
+    STZ lcd_char_count
 
     RTS ; return
+
+lcd_move_to_line_2:
+    LDA #$C0 ; line 2 position 0
+    JSR send_command
+    RTS
