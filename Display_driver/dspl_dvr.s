@@ -1,3 +1,4 @@
+.setcpu "65816"
 ;===============================================
 ; Zero Page Usage Map
 ;===============================================
@@ -5,18 +6,18 @@ string_ptr   = $00    ; String pointer (2 bytes: $00-$01)
 ; $02-$FF available for future use
 
 ;===============================================
-; RAM Variables (outside zero page)
+; RAM Variables uninitialized
 ;===============================================
-; lcd_char_count: .res 1    ; Position counter for 16x2 LCD (0-31)
+.segment "BSS"
 
+lcd_char_count: .res 1    ; Position counter for 16x2 LCD (0-31)
 
-.setcpu "65816"
 
 .segment "RODATA"
     email_string:
-        .byte "alexey.chernyuk@gmail.com",0
-.segment "CODE"
+        .byte "Zaychick sladkiy marmeladniy!",0
 
+.segment "CODE"
 
     ; stack init
     LDX #$FF 
@@ -70,6 +71,13 @@ show_char:
     STA $6001 ; Clear E=0 to complete pulse (RS=1)(E=0)
     LDA #$01 ; 842us
     JSR delay ; Wait after write LCD needs some time to finish writing
+    
+    ; change line if there are alredy 16 chars shown on LCD
+    INC lcd_char_count ; Character is written account for it
+    LDA lcd_char_count
+    AND #$0F ; mod 16
+    BEQ lcd_move_to_line_2
+
     RTS ; Return to caller
 
 ; Send command to LCD
@@ -78,7 +86,8 @@ send_command:
     STA $6002 ; Pulse E to latch a command (RS=0)(E=1)
     NOP ; 2x0.54 microsecond delay jic
     STA $6000 ; Clear E=0 to complete pulse (RS=0, E=0)
-    NOP ; 2x0.54 microsecond delay jic
+    LDA #$01 ; 1542 cycles for inner loop (~842us delay) req 100us (moved the most common delay here)
+    JSR delay
     RTS
     
 
@@ -86,8 +95,6 @@ send_command:
 show_string:
     STA string_ptr
     STX string_ptr+1
-    SEP #$20 ; FORCE 8-bit accumulator mode
-    .a8 ; Tell ASSEMBLER accumulator is 8-bit
     LDY #0 ; start at the first character
 loop:
     LDA (string_ptr), Y
@@ -114,10 +121,8 @@ lcd_init:
     JSR delay
 
     ; First sequence 
-    ; TODO: abstract to send command subroutine
     LDA #$30
     JSR send_command
-
 
     LDA #$05 ; this is 5 times loop of 255 2 (255*6)+2 +8(outerloop overhead) = 1542 cycles for inner loop (~6.2ms delay) req 4.2ms
     JSR delay
@@ -133,22 +138,14 @@ lcd_init:
     LDA #$30
     JSR send_command
 
-    LDA #$01 ; 1542 cycles for inner loop (~842us delay) req 37us for function set
-    JSR delay
-
     ; what is 38? function set 2 line 5x8 dots and 8bit mode
     LDA #$38
     JSR send_command
     
-    LDA #$01 ; 1542 cycles for inner loop (~842us delay) req 37us for display off
-    JSR delay
 
     ; Display off
     LDA #$08
     JSR send_command
-
-    LDA #$01 ; 1542 cycles for inner loop (~842us delay) req 37 us after Display off command
-    JSR delay
 
     ; Display clear
     LDA #$01
@@ -160,15 +157,15 @@ lcd_init:
     ; Entry mode set (I/D=1: Cursor moves right (increment))
     LDA #$06 
     JSR send_command
-    
-    LDA #$01 ; 1542 cycles for inner loop (~842us delay) req 37us for Display ON/OFF Control
-    JSR delay
 
     LDA #$0C ;  Display ON/OFF Control:Display ON /Cursor OFF/ Blink OFF
     JSR send_command
     
-    ; TODO: Delete me or not
-    LDA #$01 ; 1542 cycles for inner loop (~842us delay) req 37us between letters ( move to show letter function)
-    JSR delay
+    STZ lcd_char_count
 
     RTS ; return
+
+lcd_move_to_line_2:
+    LDA #$C0 ; line 2 position 0
+    JSR send_command
+    RTS
