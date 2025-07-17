@@ -14,6 +14,28 @@ lcd_char_count: .res 1    ; Position counter for 16x2 LCD (0-31)
 
 
 .segment "RODATA"
+    ;===============================================
+    ; Config:
+    ;===============================================
+    ; LCD
+    LCD_BASE = $6000
+
+    LCD_INST = LCD_BASE+$0
+    LCD_INST_E = LCD_BASE+$2
+
+    LCD_DATA = LCD_BASE+$1
+    LCD_DATA_E = LCD_BASE+$3
+
+    ; VIA
+    VIA_BASE = $8000
+    VIA_PORTB = VIA_BASE+$0
+    VIA_PORTA = VIA_BASE+$1  
+    VIA_DDRB = VIA_BASE+$2
+    VIA_DDRA = VIA_BASE+$3
+
+    ; LED
+    LED_BASE = $9000
+
     email_string:
         .byte "Zaychick sladkiy marmeladniy!",0
 
@@ -66,9 +88,9 @@ show_char:
     LDA #$01 ; 842us
     JSR delay ; Wait before write
     PLA ; restore character (pull accumulator from stack)
-    STA $6001 ; Put character on data bus (no E pulse yet)
-    STA $6003 ; Pulse E to latch character data (RS=1)(E=1)
-    STA $6001 ; Clear E=0 to complete pulse (RS=1)(E=0)
+    STA LCD_DATA ; Put character on data bus (no E pulse yet)
+    STA LCD_DATA_E ; Pulse E to latch character data (RS=1)(E=1)
+    STA LCD_DATA ; Clear E=0 to complete pulse (RS=1)(E=0)
     LDA #$01 ; 842us
     JSR delay ; Wait after write LCD needs some time to finish writing
     
@@ -82,10 +104,10 @@ show_char:
 
 ; Send command to LCD
 send_command:
-    STA $6000 ; Put command on bus (no E pulse yet)
-    STA $6002 ; Pulse E to latch a command (RS=0)(E=1)
+    STA LCD_INST ; Put command on bus (no E pulse yet)
+    STA LCD_INST_E ; Pulse E to latch a command (RS=0)(E=1)
     NOP ; 2x0.54 microsecond delay jic
-    STA $6000 ; Clear E=0 to complete pulse (RS=0, E=0)
+    STA LCD_INST ; Clear E=0 to complete pulse (RS=0, E=0)
     LDA #$01 ; 1542 cycles for inner loop (~842us delay) req 100us (moved the most common delay here)
     JSR delay
     RTS
@@ -112,7 +134,7 @@ done:
 
 ; Show binary digit on 373 latch with led
 write_to_led:
-    STA $9000 ; Write accumulator to LED 373
+    STA LED_BASE ; Write accumulator to LED 373
     RTS
 
 ; Initialize display
@@ -168,4 +190,5 @@ lcd_init:
 lcd_move_to_line_2:
     LDA #$C0 ; line 2 position 0
     JSR send_command
+    ; TODO: try to clear display one more time to get rid of trailing blackbox
     RTS
