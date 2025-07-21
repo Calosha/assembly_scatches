@@ -7,7 +7,7 @@ tmp          = $02    ; general purpose temp
 key_found    = $03    ; flag to stop the scan
 keypad_row   = $04    ; store keypad row value
 keypad_col   = $05    ; store keypad column value
-; $05-$FF available for future use
+; $06-$FF available for future use
 
 ;===============================================
 ; RAM Variables uninitialized
@@ -15,6 +15,7 @@ keypad_col   = $05    ; store keypad column value
 .segment "BSS"
 
 lcd_char_count: .res 1    ; Position counter for 16x2 LCD (0-31)
+lcd_init_clear: .res 1    ; Flag for clearing up intro from the screen at the start
 
 
 .segment "RODATA"
@@ -41,7 +42,7 @@ lcd_char_count: .res 1    ; Position counter for 16x2 LCD (0-31)
     LED_BASE = $9000
 
     email_string:
-        .byte "Zaychick sladkiy marmeladniy!",0
+        .byte "CSCI499 CapstoneAlexey Chernyuk",0
     ; maps position of 1 in the binary sting to its sequential value
     POS_TO_SEQ:
         .byte 0, 0, 1, 0, 2, 0, 0, 0, 3  ; indices 0-8
@@ -52,7 +53,6 @@ lcd_char_count: .res 1    ; Position counter for 16x2 LCD (0-31)
         .byte "+", "6", "5", "4"
         .byte "-", "9", "8", "7"
 .segment "CODE"
-
     ; stack init
     LDX #$FF 
     TXS ; 65816 reserves page1 for stack so txs will get $01FF that reflects in black space for stack in memory map
@@ -109,15 +109,20 @@ show_char:
     STA LCD_DATA ; Put character on data bus (no E pulse yet)
     STA LCD_DATA_E ; Pulse E to latch character data (RS=1)(E=1)
     STA LCD_DATA ; Clear E=0 to complete pulse (RS=1)(E=0)
-    LDA #$01 ; 842us
+    LDA #$02 ; 842us
     JSR delay ; Wait after write LCD needs some time to finish writing
     
     ; change line if there are alredy 16 chars shown on LCD
     INC lcd_char_count ; Character is written account for it
+    
+    LDA lcd_char_count
+    CMP #32
+    BEQ lcd_start_over
+    
     LDA lcd_char_count
     AND #$0F ; mod 16
     BEQ lcd_move_to_line_2
-
+    
     RTS ; Return to caller
 
 ; Send command to LCD
@@ -148,6 +153,33 @@ done:
     ; Now show the Y index as a number
     TYA           ; Transfer Y to A
     JSR write_to_led ; Display the index
+    RTS
+
+lcd_start_over:
+    STZ lcd_char_count  ; Reset counter to 0
+    JSR lcd_clear ; clear screen
+    JSR lcd_move_to_line_1 ; go back to 0,0
+    RTS
+
+lcd_move_to_line_2:
+    LDA #$C0 ; line 2 position 0
+    JSR send_command
+    LDA #$02
+    JSR delay
+    RTS
+
+lcd_move_to_line_1:
+    LDA #$80 ; line 1 position 0
+    JSR send_command
+    LDA #$02
+    JSR delay
+    RTS
+
+lcd_clear:
+    LDA #$01
+    JSR send_command
+    LDA #$05 ; 1542 cycles for inner loop (~2.5ms delay) req 1.52
+    JSR delay
     RTS
 
 ; Show binary digit on 373 latch with led
@@ -205,11 +237,6 @@ lcd_init:
 
     RTS ; return
 
-lcd_move_to_line_2:
-    LDA #$C0 ; line 2 position 0
-    JSR send_command
-    ; TODO: try to clear display one more time to get rid of trailing blackbox
-    RTS
 
 ; Initialize VIA for keyboard
 keypad_init:
@@ -269,14 +296,21 @@ check_column:
     AND #$0F ; mask upper 4 bits (not connected)
     CMP #$0F
     BEQ no_key_pressed
-    STA keypad_col
     ; key pressed
+    STA keypad_col
     ASL A ; shift 4 bits to high position of the byte
     ASL A
     ASL A
     ASL A
-
-    STA tmp ; transfer to temp
+    STA tmp ; save shifted column pattern for LED display
+    ; wait for release
+wait_release:
+    LDA VIA_PORTB
+    AND #$0F ; mask upper 4 bits
+    CMP #$0F
+    BNE wait_release
+    LDA #$05 ; 1542 cycles for inner loop (~2.5ms delay)
+    JSR delay ; this will block key repetition 
 
     PLA ; load row back to A
     AND #$0F ; mask to get only the low 4 bits of row
