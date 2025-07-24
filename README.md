@@ -22,4 +22,4 @@ make
 in the appropriate folder.
 
 ## Reference to CC65 Macro Assembler
-[GitDoc](https://cc65.github.io/doc/ca65.html#ss7.2)
+[GitDoc](https://cc65.github.io/doc/ca65.html)
