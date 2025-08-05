@@ -13,10 +13,27 @@ keypad_col   = $05    ; store keypad column value
 ; RAM Variables uninitialized
 ;===============================================
 .segment "BSS"
-
+;===============================================
+; LCD
+;===============================================
 lcd_char_count: .res 1    ; Position counter for 16x2 LCD (0-31)
-lcd_init_clear: .res 1    ; Flag for clearing up intro from the screen at the start
+lcd_curr_char: .res 1
 
+;===============================================
+; Keyboard
+;===============================================
+last_key_pressed: .res 1
+new_key_flag: .res 1
+
+;===============================================
+; Calculator
+;===============================================
+calculator_state: .res 1  ; 0=entering first operand, 1=entering second operand, 2=showing result
+first_operand: .res 1
+second_operand: .res 1
+operator: .res 1
+result: .res 1
+input_buffer: .res 1
 
 .segment "RODATA"
     ;===============================================
@@ -71,8 +88,8 @@ lcd_init_clear: .res 1    ; Flag for clearing up intro from the screen at the st
 
 main_loop:
     JSR keyboard_scan
+    JSR calculator_check_input ; calculator
     JMP main_loop
-    
     JMP forever ; Go to forever loop
 
 forever:
@@ -104,31 +121,41 @@ read_lcd_status:
     LDA LCD_INST           ; Read LCD status
     LDA LCD_INST_E         ; Pulse E
     NOP
-    JSR write_to_led       ; Show this value on LED
+    RTS
+
+; Show string
+show_string:
+    STA string_ptr
+    STX string_ptr+1
+    LDY #0 ; start at the first character
+@loop:
+    LDA (string_ptr), Y
+    BEQ @done
+    
+    JSR show_char         ; Show actual character
+    
+    INY
+    JMP @loop
+@done:
+    ; Now show the Y index as a number
+    TYA           ; Transfer Y to A
     RTS
 
 ; Show single character
 show_char:
-    PHA ; Save character ( push accumulator into stack)
-    
-    LDA #$05 ; 842us
-    JSR delay ; Wait before write
-    
-    PLA ; restore character (pull accumulator from stack)
-    JSR send_data
+    STA lcd_curr_char
+    JSR send_data_BF
     
     ; change line if there are alredy 16 chars shown on LCD
     INC lcd_char_count ; Character is written account for it
     
     LDA lcd_char_count
-    CMP #32
+    CMP #33
     BEQ lcd_start_over
     
     LDA lcd_char_count
     AND #$0F ; mod 16
     BEQ lcd_move_to_line_2
-
-    JSR read_lcd_status
     
     RTS ; Return to caller
 
@@ -156,49 +183,35 @@ send_command_BF:
     
     RTS ; return
 
-
-send_data:
+send_data_BF:
+    PHA
+    LDA #$01 ; 1542 cycles for inner loop (~842us delay) req 100us (moved the most common delay here)
+    JSR delay
+    PLA
     STA LCD_DATA ; Put command on bus (no E pulse yet)
     STA LCD_DATA_E ; Pulse E to latch a command (RS=0)(E=1)
-    NOP ; 2x0.54 microsecond delay jic
     STA LCD_DATA ; Clear E=0 to complete pulse (RS=0, E=0)
-    LDA #$03 ; 1542 cycles for inner loop (~842us delay) req 100us (moved the most common delay here)
-    JSR delay
-    RTS
-
-; Wait for LCD to be ready by checking busy flag
-wait_lcd_ready:
-    PHA ; Save accumulator
 @wait_loop:
-    LDA LCD_INST ; Read busy flag (RS=0, R/W=1, E=0)
-    LDA LCD_INST_E ; Pulse E to read (RS=0, R/W=1, E=1) 
-    NOP ; Brief delay
-    LDA LCD_INST ; Latch data and clear E (RS=0, R/W=1, E=0)
-    BMI @wait_loop ; Branch if bit 7 (busy flag) is set
-    PLA ; Restore accumulator  
-    RTS
-    
+    LDA LCD_INST           ; Read LCD status
+    LDA LCD_INST_E         ; Pulse E
+    PHA
+    LDA LCD_INST ;clear E incase we need to read again
+    PLA
+    BMI @wait_loop ; if highest bit is set then lcd is busy
+    LDA #$01 ; 1542 cycles for inner loop (~842us delay) req 100us (moved the most common delay here)
+    JSR delay
+    RTS ; return
 
-; Show string
-show_string:
-    STA string_ptr
-    STX string_ptr+1
-    LDY #0 ; start at the first character
-@loop:
-    LDA (string_ptr), Y
-    BEQ @done
-    
-    JSR show_char         ; Show actual character
-    
-    INY
-    JMP @loop
-@done:
-    ; Now show the Y index as a number
-    TYA           ; Transfer Y to A
-    JSR write_to_led ; Display the index
-    RTS
-
+; TODO: remove showing new char from start over we need this function
 lcd_start_over:
+    STZ lcd_char_count  ; Reset counter to 0
+    JSR lcd_clear ; clear screen
+    JSR lcd_move_to_line_1 ; go back to 0,0
+    LDA lcd_curr_char
+    JSR show_char
+    RTS
+
+lcd_start_over_calc:
     STZ lcd_char_count  ; Reset counter to 0
     JSR lcd_clear ; clear screen
     JSR lcd_move_to_line_1 ; go back to 0,0
@@ -206,23 +219,17 @@ lcd_start_over:
 
 lcd_move_to_line_2:
     LDA #$C0 ; line 2 position 0
-    JSR send_command
-    LDA #$02
-    JSR delay
+    JSR send_command_BF
     RTS
 
 lcd_move_to_line_1:
     LDA #$80 ; line 1 position 0
-    JSR send_command
-    LDA #$02
-    JSR delay
+    JSR send_command_BF
     RTS
 
 lcd_clear:
     LDA #$01
-    JSR send_command
-    LDA #$05 ; 1542 cycles for inner loop (~2.5ms delay) req 1.52
-    JSR delay
+    JSR send_command_BF
     RTS
 
 ; Show binary digit on 373 latch with led
@@ -271,7 +278,7 @@ lcd_init:
 
     LDA #$0C ;  Display ON/OFF Control:Display ON /Cursor OFF/ Blink OFF
     JSR send_command_BF
-    
+
     STZ lcd_char_count
 
     RTS ; return
@@ -342,9 +349,12 @@ wait_release:
     ORA tmp ; cobine row with column
 
     JSR get_keypad_key_value
+    STA last_key_pressed
+
     JSR show_char
     LDA #$01
     STA key_found ; Save the fact that key is found to stop scaning
+    STA new_key_flag
     RTS ; key detected nothing else to do
 no_key_pressed:
     PLA ; restore A
@@ -374,25 +384,83 @@ get_keypad_key_value:
     RTS ; A holds the ascii value lets get out
 @invalid_key:
     LDA #$FF ; load error black box
+    JSR write_to_led ; lets see if we get here
     RTS ; return 
 
-; VIA port A test functions pushed them back to save for other jumps
-test_pa_pins:
-    LDA #$05        ; 0101 = PA1 and PA0 HIGH
-    STA VIA_PORTA
-    
-    LDA VIA_PORTA
+; Can't belive I went this far!
+calculator_check_input:
+    LDA calculator_state
+    CMP #2
+    BNE @begin
+    ;clear screen clear state
+    STZ first_operand
+    STZ second_operand
+    JSR lcd_start_over_calc
+@begin:
+    LDA new_key_flag ; check if new key is pressed
+    BEQ @done
+    STZ new_key_flag
+    LDA last_key_pressed
+     
+    CMP #$30     ; Compare with '0'
+    BCC @not_digit  ; Branch if A < '0' 
+    CMP #$3A     ; Compare with ':'
+    BCS @not_digit  ; Branch if A >= ':'
+
+@digit: ; Cheap local label for the flow clarity
+    ; is digit
+    ; Convert ascii to binary
     AND #$0F
-    CMP #$05        ; Check if reads back as 5
-    BEQ pa_ok
-    
-    LDA #$FF        ; Error
-    JSR write_to_led
-    RTS
-    
-pa_ok:
-    LDA #$05        ; Success - show 5 on LED
-    JSR write_to_led
+    PHA ; save to stack 
+    LDA calculator_state ; load calculator state
+    BNE @load_second
+    ; Check if we need to add to first or second operand
+@load_first:
+    PLA ; get digit back from stack
+    STA first_operand
+    JMP @done
+@load_second:
+    PLA ; get digit back from stack
+    STA second_operand
+    JMP @done
+
+@not_digit:
+    ; Check if it's 'E' (equals)
+    CMP #'+'
+    BEQ @operator
+    CMP #'*'
+    BEQ @operator
+    CMP #'-'
+    BEQ @operator
+    CMP #'/'
+    BEQ @operator
+    CMP #'E'
+    BNE @done ; should go to error
+@calculate:    
+    JSR lcd_start_over_calc
+    ; calculate and show result here
+    ;reset calculator state
+    LDA #0 
+    STA calculator_state
+    CLC
+    LDA first_operand
+    ADC second_operand
+    CLC
+    ADC #$30 ; convert back to ascii
+    JSR show_char
+    LDA #2
+    STA calculator_state
+
+    JMP @done
+
+@operator:
+    ; save operator will be used to calculate the result
+    STA operator
+    LDA #1 
+    STA calculator_state
+    JMP @done
+@done:
     RTS
 
-
+@accum_digit:
+    RTS
