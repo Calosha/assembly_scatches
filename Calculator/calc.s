@@ -60,7 +60,7 @@ input_buffer: .res 1
     LED_BASE = $9000
 
     email_string:
-        .byte "CSCI499 CapstoneAlexey Chernyuk",0
+        .byte "CSCI499 Capstone Alexey Chernyuk",0
     ; maps position of 1 in the binary sting to its sequential value
     POS_TO_SEQ:
         .byte 0, 0, 1, 0, 2, 0, 0, 0, 3  ; indices 0-8
@@ -389,6 +389,10 @@ get_keypad_key_value:
 
 ; Can't belive I went this far!
 calculator_check_input:
+    LDA new_key_flag ; execute calculator only if new key is pressed
+    BNE @continue  ; Branch if key pressed
+    RTS           ; Return immediately if no key
+@continue:
     LDA calculator_state
     CMP #2
     BNE @begin
@@ -396,9 +400,8 @@ calculator_check_input:
     STZ first_operand
     STZ second_operand
     JSR lcd_start_over_calc
+    STZ calculator_state ; start over
 @begin:
-    LDA new_key_flag ; check if new key is pressed
-    BEQ @done
     STZ new_key_flag
     LDA last_key_pressed
      
@@ -426,6 +429,11 @@ calculator_check_input:
 
 @not_digit:
     ; Check if it's 'E' (equals)
+    CMP #'E'
+    BNE @check_operator
+    JMP @calculate    ; Jump to calculate if it's 'E'
+    
+@check_operator:
     CMP #'+'
     BEQ @operator
     CMP #'*'
@@ -434,17 +442,91 @@ calculator_check_input:
     BEQ @operator
     CMP #'/'
     BEQ @operator
-    CMP #'E'
-    BNE @done ; should go to error
+    JMP @done        ; Not a valid key
+    
+@operator:
+    ; save operator will be used to calculate the result
+    STA operator
+    LDA #1 
+    STA calculator_state
+    JMP @done
+
 @calculate:    
     JSR lcd_start_over_calc
-    ; calculate and show result here
-    ;reset calculator state
     LDA #0 
     STA calculator_state
     CLC
+    LDA operator
+    CMP #'+'
+    BNE @not_add
+    JMP @do_add      ; Use JMP for long distance
+@not_add:
+    CMP #'*'
+    BNE @not_mul
+    JMP @do_mul
+@not_mul:
+    CMP #'-'
+    BNE @not_sub
+    JMP @do_sub
+@not_sub:
+    JMP @done        ; No valid operator
+@do_add:
+    CLC
     LDA first_operand
     ADC second_operand
+    STA result
+    JMP @show
+@do_mul:
+    LDA #0 ; Start with 0
+    LDX second_operand
+    BEQ @mul_done ; Handle multiply by 0
+@mul_loop:
+    CLC
+    ADC first_operand
+    DEX
+    BNE @mul_loop
+@mul_done:
+    STA result
+    JMP @show
+@do_sub:
+    SEC
+    LDA first_operand
+    SBC second_operand
+    BCS @positive_result  ; If carry set, result is positive
+    ; Negative result - show minus sign
+    PHA                   ; Save negative result
+    LDA #'-'
+    JSR show_char
+    PLA
+    EOR #$FF             ; Two's complement
+    CLC
+    ADC #1
+@positive_result:
+    STA result
+    JMP @show
+    
+@show:
+    LDA result
+    CMP #10
+    BCC @single_digit
+; Two digits - extract tens
+    LDX #0      ; Counter for tens
+@count_tens:
+    CMP #10
+    BCC @show_tens
+    SEC         ; Set Carry flag (sets carry to 1)
+    SBC #10     ; Subtract 10 (with borrow)
+    INX         ; Count how many 10s
+    JMP @count_tens
+@show_tens:
+    PHA         ; Save remainder (ones digit)
+    TXA         ; Get tens count
+    CLC
+    ADC #$30    ; Convert to ASCII
+    JSR show_char
+    PLA         ; Restore ones digit
+
+@single_digit:
     CLC
     ADC #$30 ; convert back to ascii
     JSR show_char
@@ -453,14 +535,6 @@ calculator_check_input:
 
     JMP @done
 
-@operator:
-    ; save operator will be used to calculate the result
-    STA operator
-    LDA #1 
-    STA calculator_state
-    JMP @done
 @done:
     RTS
 
-@accum_digit:
-    RTS
