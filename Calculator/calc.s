@@ -494,11 +494,11 @@ calculator_check_input:
     SBC second_operand
     BCS @positive_result  ; If carry set, result is positive
     ; Negative result - show minus sign
-    PHA                   ; Save negative result
+    PHA ; Save negative result
     LDA #'-'
     JSR show_char
     PLA
-    EOR #$FF             ; Two's complement
+    EOR #$FF ; Two's complement invert plus one
     CLC
     ADC #1
 @positive_result:
